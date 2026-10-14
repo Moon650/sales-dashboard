@@ -198,6 +198,23 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
 
   var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+  /* Live data: rows are read from the Supabase "sales" table. The key below is the public (publishable) key.
+     The table allows read-only access, so the key cannot change any data. */
+  var SUPABASE_URL = 'https://wvkxwmqnitxflolmezjl.supabase.co';
+  var SUPABASE_KEY = 'sb_publishable_JTwgvDmuKDcK0AEfyBwYGA_z9gGH8_c';
+  function loadLive() {
+    var url = SUPABASE_URL + '/rest/v1/sales?select=sale_date,region,product,category,sales_channel,unit_price,revenue,cost,profit&order=sale_date.asc&limit=10000';
+    return fetch(url, { headers: { apikey: SUPABASE_KEY } })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (data) {
+        var out = data.map(function (r) {
+          return { date: r.sale_date, region: r.region, product: r.product, category: r.category, channel: r.sales_channel, price: +r.unit_price, revenue: +r.revenue, cost: +r.cost, profit: +r.profit };
+        });
+        if (!out.length) throw new Error('the sales table is empty');
+        return out;
+      });
+  }
+
   /* Product groupings used by the Category filter. The Excel file has no category column, so these are assigned here. */
   var CATS = {
     'Wireless Mouse': 'Computers & Accessories', 'Mechanical Keyboard': 'Computers & Accessories', 'USB-C Hub': 'Computers & Accessories',
@@ -213,7 +230,7 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
   /* ---------- Processing ---------- */
   function prep(rows) {
     return rows.map(function (r, i) {
-      return Object.assign({}, r, { id: i, month: r.date.slice(0, 7), category: CATS[r.product] || 'Other', margin: r.revenue ? r.profit / r.revenue : 0 });
+      return Object.assign({}, r, { id: i, month: r.date.slice(0, 7), category: r.category || CATS[r.product] || 'Other', margin: r.revenue ? r.profit / r.revenue : 0 });
     });
   }
   function agg(rows, keyFn) {
@@ -513,7 +530,7 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
 
   function App() {
     var rs = useState(function () { return prep(SAMPLE); }), rows = rs[0], setRows = rs[1];
-    var ss = useState({ name: 'sales_data.xlsx', custom: false }), src = ss[0], setSrc = ss[1];
+    var ss = useState({ name: 'Loading from Supabase…', custom: false, live: false }), src = ss[0], setSrc = ss[1];
     var fs = useState({ region: null, channel: null, month: null, category: null, product: null }), f = fs[0], setF = fs[1];
     var ms = useState('profit'), metric = ms[0], setMetric = ms[1];
     var sts = useState({ key: 'date', dir: 'asc' }), sort = sts[0], setSort = sts[1];
@@ -577,7 +594,17 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
       rd.readAsArrayBuffer(file);
       e.target.value = '';
     }
-    function reset() { setRows(prep(SAMPLE)); setSrc({ name: 'sales_data.xlsx', custom: false }); clear(); setErr(''); }
+    function fetchLive() {
+      setErr('');
+      return loadLive().then(function (live) {
+        setRows(prep(live)); setSrc({ name: 'Supabase sales table', custom: false, live: true });
+      }).catch(function (x) {
+        setRows(prep(SAMPLE)); setSrc({ name: 'built-in sample (sales_data.xlsx)', custom: false, live: false });
+        setErr('Live data could not be loaded (' + (x && x.message ? x.message : 'network error') + '). Showing the built-in sample.');
+      });
+    }
+    useEffect(function () { fetchLive(); }, []);
+    function reset() { clear(); fetchLive(); }
     function sortBy(k) { setSort(function (s) { return s.key === k ? { key: k, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: (k === 'date' || k === 'region' || k === 'product' || k === 'category' || k === 'channel') ? 'asc' : 'desc' }; }); }
 
     var multi = new Set(dims.months.map(function (m) { return m.slice(0, 4); })).size > 1;
@@ -595,10 +622,11 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
         h('div', null,
           h('p', { className: 'eyebrow' }, dims.first ? fdate(dims.first) + ' – ' + fdate(dims.last) : 'Sales'),
           h('h1', null, 'Sales Performance'),
-          h('p', { className: 'src' }, 'Source: ' + src.name + ' · ' + rows.length + ' sales lines · ' + dims.regions.length + ' regions' + (src.custom ? '' : ' · sample figures'))),
+          h('p', { className: 'src' }, 'Source: ' + src.name + ' · ' + rows.length + ' sales lines · ' + dims.regions.length + ' regions' + (src.live ? ' · live from Supabase' : src.custom ? '' : ' · sample figures'))),
         h('div', { className: 'actions' },
           err ? h('p', { className: 'err', role: 'alert' }, err) : null,
-          src.custom ? h('button', { type: 'button', className: 'btn link', onClick: reset }, 'Back to sample data') : null,
+          src.custom ? h('button', { type: 'button', className: 'btn link', onClick: reset }, 'Back to live data') : null,
+          src.live ? h('button', { type: 'button', className: 'btn', onClick: fetchLive }, 'Refresh data') : null,
           h('input', { ref: fileRef, id: 'file', type: 'file', accept: '.xlsx,.xls,.csv', style: { display: 'none' }, onChange: onFile }),
           h('button', { type: 'button', className: 'btn primary', onClick: function () { fileRef.current.click(); } }, 'Load another file'))),
 
@@ -656,7 +684,7 @@ tfoot td { font-weight: 600; border-bottom: 0; background: var(--surface-2); }
             h('section', { className: 'card s12' },
               h('header', null, h('h2', null, 'Sales ledger'), h('p', null, 'Click a column heading to sort. Margin below 28% is flagged red, 36% and above green.')),
               h(Ledger, { rows: filtered, sort: sort, onSort: sortBy })))),
-      h('p', { className: 'foot' }, 'Profit is revenue minus cost. Loading another file reads its first sheet and expects the same column names as the sample. Product categories are grouped inside the dashboard because the file has no category column.'));
+      h('p', { className: 'foot' }, 'Profit is revenue minus cost. Rows are read from the Supabase sales table each time the page loads. Loading another file reads its first sheet in your browser only and expects the same column names as the sample.'));
   }
 
   ReactDOM.createRoot(document.getElementById('root')).render(h(App));
